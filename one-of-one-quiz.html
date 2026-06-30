@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>One-of-One Quiz</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700&family=Space+Mono:wght@400;700&display=swap" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  @keyframes stampIn {0%{transform:scale(2.4) rotate(-18deg);opacity:0}
+    60%{transform:scale(.92) rotate(4deg);opacity:1}
+    100%{transform:scale(1) rotate(-3deg);opacity:1}}
+  @keyframes pop {0%{transform:scale(.96)}100%{transform:scale(1)}}
+  .ooq-stamp{animation:stampIn .55s cubic-bezier(.2,1.2,.4,1) both}
+  .ooq-pop{animation:pop .2s ease both}
+  @media (prefers-reduced-motion: reduce){.ooq-stamp,.ooq-pop{animation:none}}
+  body{margin:0;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+/* ------------------------------------------------------------------ */
+/*  One-of-One Quiz — standalone build. Shared state is stored on      */
+/*  kvdb.io (a free, no-signup key-value store) under a "room" id      */
+/*  that's embedded in the URL, so anyone with the link is in sync.    */
+/* ------------------------------------------------------------------ */
+
+const C = {
+  frost: "#F2EFFB", grape: "#3B2A6B", ink: "#1E1633",
+  pink: "#FF5DA2", tang: "#FF8A3D", lime: "#B6E84A", sky: "#56C8E8",
+};
+const FONTS = {
+  display: "'Baloo 2', system-ui, sans-serif",
+  body: "'Nunito', system-ui, sans-serif",
+  mono: "'Space Mono', ui-monospace, monospace",
+};
+
+/* ---- kvdb.io storage layer ---- */
+const KV_BASE = "https://kvdb.io";
+
+async function createRoom() {
+  const res = await fetch(`${KV_BASE}/`, { method: "POST" });
+  const id = (await res.text()).trim();
+  return id;
+}
+async function loadKey(room, key) {
+  try {
+    const res = await fetch(`${KV_BASE}/${room}/${key}`, { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+async function saveKey(room, key, val) {
+  try {
+    await fetch(`${KV_BASE}/${room}/${key}`, {
+      method: "POST",
+      body: JSON.stringify(val),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const traitsToStr = (a) => (a || []).join(", ");
+const strToTraits = (s) =>
+  (s || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+const DEFAULT_CONFIG = {
+  title: "Which Snack Are You?",
+  hostPassword: "party",
+  results: [
+    { id: uid(), name: "Spicy Chip", traits: ["bold", "loud", "fun"] },
+    { id: uid(), name: "Dark Chocolate", traits: ["deep", "calm", "classy"] },
+    { id: uid(), name: "Gummy Bears", traits: ["fun", "sweet", "playful"] },
+    { id: uid(), name: "Black Coffee", traits: ["intense", "focused", "calm"] },
+    { id: uid(), name: "Fresh Bread", traits: ["warm", "cozy", "classy"] },
+    { id: uid(), name: "Sour Candy", traits: ["bold", "playful", "loud"] },
+    { id: uid(), name: "Smoothie", traits: ["fresh", "calm", "sweet"] },
+    { id: uid(), name: "Hot Wings", traits: ["loud", "bold", "fun"] },
+  ],
+  questions: [
+    { id: uid(), text: "Pick a Friday night", options: [
+      { id: uid(), text: "Out till sunrise", traits: ["loud", "fun"] },
+      { id: uid(), text: "Cozy on the couch", traits: ["warm", "calm"] },
+      { id: uid(), text: "Something new + intense", traits: ["bold", "intense"] },
+      { id: uid(), text: "Chill with a few people", traits: ["calm", "sweet"] },
+    ]},
+    { id: uid(), text: "Your group calls you the…", options: [
+      { id: uid(), text: "Life of the party", traits: ["loud", "fun"] },
+      { id: uid(), text: "Wise one", traits: ["deep", "calm"] },
+      { id: uid(), text: "Wild card", traits: ["bold", "playful"] },
+      { id: uid(), text: "Comfort person", traits: ["warm", "cozy"] },
+    ]},
+    { id: uid(), text: "Choose a vibe", options: [
+      { id: uid(), text: "Neon + bass", traits: ["loud", "bold"] },
+      { id: uid(), text: "Candles + quiet", traits: ["calm", "classy"] },
+      { id: uid(), text: "Sunshine + fresh air", traits: ["fresh", "sweet"] },
+      { id: uid(), text: "Confetti + chaos", traits: ["playful", "fun"] },
+    ]},
+  ],
+};
+
+function bestAvailable(config, chosenOptionIds, claims) {
+  const tally = {};
+  config.questions.forEach((q) => {
+    q.options.forEach((o) => {
+      if (chosenOptionIds.includes(o.id)) {
+        o.traits.forEach((t) => (tally[t] = (tally[t] || 0) + 1));
+      }
+    });
+  });
+  const taken = new Set(Object.keys(claims));
+  const available = config.results.filter((r) => !taken.has(r.id));
+  if (available.length === 0) return null;
+  const scored = available.map((r) => ({
+    r, score: r.traits.reduce((s, t) => s + (tally[t] || 0), 0),
+  }));
+  const max = Math.max(...scored.map((s) => s.score));
+  const top = scored.filter((s) => s.score === max);
+  return top[Math.floor(Math.random() * top.length)].r;
+}
+
+/* ---- room landing: create a room if the URL has none ---- */
+function getRoomFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("room");
+}
+
+function RoomLanding() {
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState(false);
+
+  const create = async () => {
+    setCreating(true);
+    setError(false);
+    try {
+      const room = await createRoom();
+      const url = new URL(window.location.href);
+      url.searchParams.set("room", room);
+      sessionStorage.setItem("ooq-just-created", "1");
+      window.location.href = url.toString();
+    } catch (e) {
+      setError(true);
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div style={{ background: C.frost, minHeight: "100vh", fontFamily: FONTS.body, color: C.ink }}>
+      <div className="mx-auto px-4 py-10 text-center" style={{ maxWidth: 480 }}>
+        <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: C.pink }} className="font-bold mb-2">
+          ★ ONE-OF-ONE QUIZ
+        </p>
+        <h1 style={{ fontFamily: FONTS.display, fontSize: 36, color: C.grape }} className="font-extrabold mb-4">
+          Set up your quiz
+        </h1>
+        <p style={{ fontSize: 15 }} className="mb-6">
+          This creates a fresh, private quiz room. You'll get a link to share — anyone who opens it
+          plays the same quiz and claims results from the same shared pool.
+        </p>
+        <button
+          onClick={create}
+          disabled={creating}
+          className="w-full py-3.5 rounded-2xl font-extrabold ooq-pop"
+          style={{ background: creating ? "#d8d2e8" : C.pink, color: "white", fontSize: 17, fontFamily: FONTS.display }}
+        >
+          {creating ? "Creating…" : "Create my quiz room"}
+        </button>
+        {error && (
+          <p style={{ color: C.pink, fontSize: 13 }} className="mt-3 font-bold">
+            Couldn't reach the storage service — check your connection and try again.
+          </p>
+        )}
+        <p className="mt-6" style={{ fontSize: 12.5, color: C.grape, opacity: 0.7 }}>
+          Default host password is "party" — change it under Host Setup before sharing the link.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const room = getRoomFromUrl();
+  if (!room) return <RoomLanding />;
+  return <QuizApp room={room} />;
+}
+
+function QuizApp({ room }) {
+  const [view, setView] = useState("quiz");
+  const [unlocked, setUnlocked] = useState(false);
+  const [config, setConfig] = useState(null);
+  const [claims, setClaims] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [justCreated, setJustCreated] = useState(false);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("ooq-just-created")) {
+      setJustCreated(true);
+      sessionStorage.removeItem("ooq-just-created");
+    }
+    (async () => {
+      let cfg = await loadKey(room, "quizConfig");
+      if (!cfg) {
+        cfg = DEFAULT_CONFIG;
+        await saveKey(room, "quizConfig", cfg);
+      }
+      const cl = (await loadKey(room, "quizClaims")) || {};
+      setConfig(cfg);
+      setClaims(cl);
+      setLoading(false);
+    })();
+  }, [room]);
+
+  const refreshClaims = async () => setClaims((await loadKey(room, "quizClaims")) || {});
+
+  if (loading || !config)
+    return <div style={{ background: C.frost, minHeight: "100vh", fontFamily: FONTS.body }} />;
+
+  const claimedCount = Object.keys(claims).length;
+  const total = config.results.length;
+  const shareUrl = window.location.href;
+
+  return (
+    <div style={{ background: C.frost, minHeight: "100vh", fontFamily: FONTS.body, color: C.ink }}>
+      <div className="mx-auto px-4 py-5" style={{ maxWidth: 560 }}>
+        <div className="flex items-center justify-between mb-5">
+          <div className="font-bold tracking-wide" style={{ fontFamily: FONTS.mono, fontSize: 12, color: C.grape }}>
+            ★ ONE-OF-ONE QUIZ
+          </div>
+          <button
+            onClick={() => { setView(view === "host" ? "quiz" : "host"); if (view !== "host") refreshClaims(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold"
+            style={{ background: view === "host" ? C.grape : "transparent", color: view === "host" ? "white" : C.grape, border: `2px solid ${C.grape}`, fontSize: 13 }}
+          >
+            {view === "host" ? "← Back to quiz" : "⚙ Host setup"}
+          </button>
+        </div>
+
+        {justCreated && (
+          <ShareBanner shareUrl={shareUrl} onDismiss={() => setJustCreated(false)} />
+        )}
+
+        {view === "quiz" ? (
+          <Quiz config={config} claims={claims} setClaims={setClaims} refreshClaims={refreshClaims} room={room} />
+        ) : (
+          <Host
+            config={config} setConfig={setConfig} claims={claims} setClaims={setClaims}
+            refreshClaims={refreshClaims} claimedCount={claimedCount} total={total}
+            unlocked={unlocked} setUnlocked={setUnlocked} room={room} shareUrl={shareUrl}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ShareBanner({ shareUrl, onDismiss }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch (e) {}
+  };
+  return (
+    <div className="mb-5 rounded-2xl p-4" style={{ background: "white", border: `2px solid ${C.grape}` }}>
+      <p style={{ fontFamily: FONTS.display, fontWeight: 700, fontSize: 16, color: C.grape }} className="mb-1">
+        Room created! 🎉
+      </p>
+      <p style={{ fontSize: 13.5 }} className="mb-3">
+        This page's link is your shared quiz. Copy it now and send it to your group.
+      </p>
+      <div className="flex gap-2">
+        <button onClick={copy} className="flex-1 py-2.5 rounded-xl font-bold" style={{ background: C.pink, color: "white", fontSize: 13.5 }}>
+          {copied ? "Copied ✓" : "Copy link"}
+        </button>
+        <button onClick={onDismiss} className="px-4 py-2.5 rounded-xl font-bold" style={{ background: C.frost, color: C.grape, fontSize: 13.5 }}>
+          Got it
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ QUIZ ============================ */
+function Quiz({ config, claims, setClaims, refreshClaims, room }) {
+  const [stage, setStage] = useState("intro");
+  const [name, setName] = useState("");
+  const [qi, setQi] = useState(0);
+  const [chosen, setChosen] = useState([]);
+  const [result, setResult] = useState(null);
+  const [num, setNum] = useState(null);
+
+  const claimedCount = Object.keys(claims).length;
+  const total = config.results.length;
+
+  const start = async () => {
+    if (!name.trim()) return;
+    await refreshClaims();
+    setStage("q");
+  };
+
+  const choose = async (optId) => {
+    const next = [...chosen, optId];
+    setChosen(next);
+    if (qi + 1 < config.questions.length) {
+      setQi(qi + 1);
+    } else {
+      const latest = (await loadKey(room, "quizClaims")) || {};
+      const match = bestAvailable(config, next, latest);
+      if (!match) { setStage("full"); return; }
+      const n = Object.keys(latest).length + 1;
+      latest[match.id] = { name: name.trim(), num: n, ts: Date.now() };
+      await saveKey(room, "quizClaims", latest);
+      setClaims(latest);
+      setResult(match);
+      setNum(n);
+      setStage("done");
+    }
+  };
+
+  if (stage === "intro") {
+    return (
+      <div>
+        <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: C.pink }} className="font-bold mb-2">
+          {claimedCount} of {total} claimed — get yours
+        </p>
+        <h1 style={{ fontFamily: FONTS.display, fontSize: 44, lineHeight: 1.02, color: C.grape }} className="font-extrabold mb-6">
+          {config.title}
+        </h1>
+        <div className="rounded-3xl p-5" style={{ background: "white", border: `2px solid ${C.grape}` }}>
+          <label className="font-bold" style={{ fontSize: 14 }}>What's your name?</label>
+          <input
+            value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && start()}
+            placeholder="Type it here"
+            className="w-full mt-2 mb-4 px-4 py-3 rounded-2xl outline-none"
+            style={{ border: `2px solid ${C.frost}`, background: C.frost, fontSize: 16 }}
+          />
+          <button
+            onClick={start} disabled={!name.trim()}
+            className="w-full py-3.5 rounded-2xl font-extrabold ooq-pop"
+            style={{ background: name.trim() ? C.pink : "#d8d2e8", color: "white", fontSize: 17, fontFamily: FONTS.display }}
+          >
+            Start
+          </button>
+        </div>
+        <p className="mt-4 text-center" style={{ fontSize: 12.5, color: C.grape, opacity: 0.7 }}>
+          Each result can only be claimed once. Answer honestly — first come, best match.
+        </p>
+      </div>
+    );
+  }
+
+  if (stage === "full") {
+    return (
+      <Centered>
+        <h2 style={{ fontFamily: FONTS.display, fontSize: 30, color: C.grape }} className="font-extrabold mb-2">
+          Every result's been claimed!
+        </h2>
+        <p style={{ fontSize: 15 }}>All {total} are taken. Ask the host to add more results, then try again.</p>
+      </Centered>
+    );
+  }
+
+  if (stage === "done" && result) {
+    return <Ticket result={result} name={name.trim()} num={num} total={total} />;
+  }
+
+  const q = config.questions[qi];
+  return (
+    <div>
+      <div className="flex gap-1.5 mb-5">
+        {config.questions.map((_, i) => (
+          <div key={i} className="flex-1 rounded-full" style={{ height: 7, background: i <= qi ? C.pink : "#ddd6ee" }} />
+        ))}
+      </div>
+      <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: C.grape }} className="mb-1">
+        {qi + 1} / {config.questions.length}
+      </p>
+      <h2 style={{ fontFamily: FONTS.display, fontSize: 30, lineHeight: 1.08, color: C.ink }} className="font-extrabold mb-5">
+        {q.text}
+      </h2>
+      <div className="space-y-3">
+        {q.options.map((o, i) => {
+          const colors = [C.pink, C.tang, C.sky, C.grape];
+          const bg = colors[i % colors.length];
+          return (
+            <button
+              key={o.id} onClick={() => choose(o.id)}
+              className="w-full text-left px-5 py-4 rounded-2xl font-bold ooq-pop"
+              style={{ background: "white", border: `2px solid ${bg}`, color: C.ink, fontSize: 16.5 }}
+            >
+              <span style={{ fontFamily: FONTS.mono, color: bg, marginRight: 10, fontSize: 14 }}>
+                {String.fromCharCode(65 + i)}
+              </span>
+              {o.text}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Ticket({ result, name, num, total }) {
+  return (
+    <Centered>
+      <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: C.pink }} className="font-bold mb-4">
+        ✨ {name.toUpperCase()}, YOU MATCHED WITH
+      </p>
+      <div className="ooq-stamp relative mx-auto" style={{ background: "white", border: `3px solid ${C.grape}`, borderRadius: 24, padding: "30px 24px 24px", maxWidth: 360 }}>
+        <div className="absolute" style={{ top: -14, right: 18, background: C.lime, color: C.ink, fontFamily: FONTS.mono, fontWeight: 700, fontSize: 12, padding: "5px 12px", borderRadius: 999, border: `2px solid ${C.grape}`, transform: "rotate(-4deg)" }}>
+          CLAIMED ✓
+        </div>
+        <div style={{ fontFamily: FONTS.display, fontSize: 40, lineHeight: 1.04, color: C.grape }} className="font-extrabold">
+          {result.name}
+        </div>
+        {result.traits.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-center mt-4">
+            {result.traits.map((t) => (
+              <span key={t} style={{ background: C.frost, color: C.grape, fontSize: 13, fontWeight: 700, padding: "4px 12px", borderRadius: 999 }}>
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="mt-5 pt-4" style={{ borderTop: `2px dashed ${C.grape}`, fontFamily: FONTS.mono, fontSize: 13, color: C.grape }}>
+          NO. {String(num).padStart(2, "0")} / {String(total).padStart(2, "0")} · 1 OF 1
+        </div>
+      </div>
+      <p className="mt-5" style={{ fontSize: 14, color: C.grape }}>
+        This one's yours alone — nobody else can get it. Pass the phone to the next person!
+      </p>
+    </Centered>
+  );
+}
+
+function Centered({ children }) { return <div className="text-center pt-6">{children}</div>; }
+
+function LockGate({ config, onUnlock }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(false);
+  const submit = () => {
+    if (pw === (config.hostPassword || "party")) onUnlock();
+    else setErr(true);
+  };
+  return (
+    <div className="pt-8">
+      <h2 style={{ fontFamily: FONTS.display, fontSize: 28, color: C.grape }} className="font-extrabold mb-1">Host only</h2>
+      <p style={{ fontSize: 14, color: C.grape, opacity: 0.8 }} className="mb-5">Enter the password to edit the quiz and see the board.</p>
+      <div className="rounded-3xl p-5" style={{ background: "white", border: `2px solid ${C.grape}` }}>
+        <input
+          type="password" value={pw}
+          onChange={(e) => { setPw(e.target.value); setErr(false); }}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Password"
+          className="w-full mb-3 px-4 py-3 rounded-2xl outline-none"
+          style={{ border: `2px solid ${err ? C.pink : C.frost}`, background: C.frost, fontSize: 16 }}
+        />
+        {err && <p style={{ color: C.pink, fontSize: 13, fontWeight: 700 }} className="mb-3">Wrong password — try again.</p>}
+        <button onClick={submit} className="w-full py-3.5 rounded-2xl font-extrabold ooq-pop" style={{ background: C.grape, color: "white", fontSize: 16, fontFamily: FONTS.display }}>
+          Unlock
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ HOST ============================ */
+function Host({ config, setConfig, claims, setClaims, refreshClaims, claimedCount, total, unlocked, setUnlocked, room, shareUrl }) {
+  const [tab, setTab] = useState("board");
+  const [draft, setDraft] = useState(JSON.parse(JSON.stringify(config)));
+  const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const pollRef = useRef(null);
+
+  useEffect(() => {
+    pollRef.current = setInterval(() => { if (tab === "board" && unlocked) refreshClaims(); }, 6000);
+    return () => clearInterval(pollRef.current);
+  }, [tab, unlocked, refreshClaims]);
+
+  if (!unlocked) return <LockGate config={config} onUnlock={() => setUnlocked(true)} />;
+
+  const save = async () => {
+    const clean = {
+      ...draft,
+      results: draft.results.filter((r) => r.name.trim()),
+      questions: draft.questions.filter((q) => q.text.trim()).map((q) => ({ ...q, options: q.options.filter((o) => o.text.trim()) })),
+    };
+    await saveKey(room, "quizConfig", clean);
+    setConfig(clean);
+    setDraft(JSON.parse(JSON.stringify(clean)));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+
+  const resetClaims = async () => {
+    if (!window.confirm("Clear everyone's results and start fresh? This can't be undone.")) return;
+    await saveKey(room, "quizClaims", {});
+    setClaims({});
+  };
+
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(shareUrl); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch (e) {}
+  };
+
+  return (
+    <div>
+      <div className="flex gap-2 mb-5">
+        {["board", "edit"].map((t) => (
+          <button key={t} onClick={() => { setTab(t); if (t === "board") refreshClaims(); }}
+            className="px-4 py-2 rounded-full font-bold"
+            style={{ background: tab === t ? C.grape : "white", color: tab === t ? "white" : C.grape, border: `2px solid ${C.grape}`, fontSize: 14 }}>
+            {t === "board" ? "Live board" : "Edit quiz"}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-5 rounded-2xl p-3 flex items-center justify-between" style={{ background: "white", border: `2px solid #ddd6ee` }}>
+        <span style={{ fontFamily: FONTS.mono, fontSize: 11.5, color: C.grape, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {shareUrl}
+        </span>
+        <button onClick={copyLink} className="ml-2 px-3 py-1.5 rounded-full font-bold" style={{ background: C.frost, color: C.grape, fontSize: 12.5, flexShrink: 0 }}>
+          {copied ? "Copied ✓" : "Copy link"}
+        </button>
+      </div>
+
+      {tab === "board" ? (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 style={{ fontFamily: FONTS.display, fontSize: 24, color: C.grape }} className="font-extrabold">
+              {claimedCount} of {total} claimed
+            </h2>
+            <button onClick={refreshClaims} style={{ color: C.grape }} className="flex items-center gap-1 font-bold">
+              ⟳ Refresh
+            </button>
+          </div>
+          {total > 0 && total < 20 && (
+            <Note>Heads up: you have {total} results. For 20 people, add at least {20 - total} more.</Note>
+          )}
+          <div className="space-y-2">
+            {config.results.map((r) => {
+              const c = claims[r.id];
+              return (
+                <div key={r.id} className="flex items-center justify-between px-4 py-3 rounded-2xl"
+                  style={{ background: c ? C.lime : "white", border: `2px solid ${c ? C.grape : "#ddd6ee"}` }}>
+                  <span style={{ fontFamily: FONTS.display, fontWeight: 700, fontSize: 16 }}>{r.name}</span>
+                  {c ? (
+                    <span style={{ fontFamily: FONTS.mono, fontSize: 13, color: C.ink }} className="font-bold">✓ {c.name}</span>
+                  ) : (
+                    <span style={{ fontFamily: FONTS.mono, fontSize: 12, color: "#9b93b5" }}>open</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={resetClaims} className="mt-6 w-full py-3 rounded-2xl font-bold"
+            style={{ background: "white", border: `2px solid ${C.pink}`, color: C.pink, fontSize: 14 }}>
+            Reset all results
+          </button>
+        </div>
+      ) : (
+        <Editor draft={draft} setDraft={setDraft} save={save} saved={saved} />
+      )}
+    </div>
+  );
+}
+
+function Note({ children }) {
+  return <div className="mb-4 px-4 py-3 rounded-2xl" style={{ background: C.tang, color: "white", fontWeight: 700, fontSize: 13.5 }}>{children}</div>;
+}
+
+function Editor({ draft, setDraft, save, saved }) {
+  const up = (patch) => setDraft({ ...draft, ...patch });
+
+  const setResult = (id, field, val) =>
+    up({ results: draft.results.map((r) => r.id === id ? { ...r, [field]: field === "traits" ? strToTraits(val) : val } : r) });
+  const addResult = () => up({ results: [...draft.results, { id: uid(), name: "", traits: [] }] });
+  const delResult = (id) => up({ results: draft.results.filter((r) => r.id !== id) });
+
+  const setQ = (id, text) => up({ questions: draft.questions.map((q) => q.id === id ? { ...q, text } : q) });
+  const addQ = () => up({ questions: [...draft.questions, { id: uid(), text: "", options: [{ id: uid(), text: "", traits: [] }, { id: uid(), text: "", traits: [] }] }] });
+  const delQ = (id) => up({ questions: draft.questions.filter((q) => q.id !== id) });
+  const setOpt = (qid, oid, field, val) =>
+    up({ questions: draft.questions.map((q) => q.id === qid ? { ...q, options: q.options.map((o) => o.id === oid ? { ...o, [field]: field === "traits" ? strToTraits(val) : val } : o) } : q) });
+  const addOpt = (qid) => up({ questions: draft.questions.map((q) => q.id === qid ? { ...q, options: [...q.options, { id: uid(), text: "", traits: [] }] } : q) });
+  const delOpt = (qid, oid) => up({ questions: draft.questions.map((q) => q.id === qid ? { ...q, options: q.options.filter((o) => o.id !== oid) } : q) });
+
+  const field = { border: `2px solid ${C.frost}`, background: C.frost, borderRadius: 12, padding: "8px 12px", fontSize: 14.5, width: "100%", outline: "none" };
+  const tiny = { fontFamily: FONTS.mono, fontSize: 11, color: C.grape, fontWeight: 700 };
+
+  return (
+    <div className="space-y-6 pb-24">
+      <div>
+        <p style={tiny} className="mb-1">QUIZ TITLE</p>
+        <input value={draft.title} onChange={(e) => up({ title: e.target.value })} style={{ ...field, fontFamily: FONTS.display, fontWeight: 700, fontSize: 18 }} />
+      </div>
+
+      <div>
+        <p style={tiny} className="mb-1">HOST PASSWORD (opens this editor)</p>
+        <input value={draft.hostPassword || ""} onChange={(e) => up({ hostPassword: e.target.value })} placeholder="Set a password" style={field} />
+        <p style={{ fontSize: 12, color: C.grape, opacity: 0.7 }} className="mt-1">Change this from the default before you share the link. Save to apply.</p>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-2"><p style={tiny}>RESULTS ({draft.results.length}) — one per person</p></div>
+        <p style={{ fontSize: 12.5, color: C.grape, opacity: 0.75 }} className="mb-3">
+          Give each result a few trait words (comma-separated). Reuse the same words in your answer options below — that's how people get matched.
+        </p>
+        <div className="space-y-2.5">
+          {draft.results.map((r, i) => (
+            <div key={r.id} className="rounded-2xl p-3" style={{ background: "white", border: `2px solid #eee` }}>
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{ ...tiny, width: 22 }}>{String(i + 1).padStart(2, "0")}</span>
+                <input value={r.name} placeholder="Result name (e.g. Pizza)" onChange={(e) => setResult(r.id, "name", e.target.value)} style={field} />
+                <button onClick={() => delResult(r.id)} style={{ color: C.pink }}>🗑</button>
+              </div>
+              <input value={traitsToStr(r.traits)} placeholder="traits: warm, social, bold" onChange={(e) => setResult(r.id, "traits", e.target.value)} style={{ ...field, fontSize: 13 }} />
+            </div>
+          ))}
+        </div>
+        <button onClick={addResult} className="mt-3 flex items-center gap-1.5 font-bold" style={{ color: C.grape, fontSize: 14 }}>+ Add result</button>
+      </div>
+
+      <div>
+        <p style={tiny} className="mb-3">QUESTIONS ({draft.questions.length})</p>
+        <div className="space-y-4">
+          {draft.questions.map((q, qi) => (
+            <div key={q.id} className="rounded-2xl p-3" style={{ background: "white", border: `2px solid ${C.grape}` }}>
+              <div className="flex items-center gap-2 mb-3">
+                <span style={tiny}>Q{qi + 1}</span>
+                <input value={q.text} placeholder="Question text" onChange={(e) => setQ(q.id, e.target.value)} style={{ ...field, fontWeight: 700 }} />
+                <button onClick={() => delQ(q.id)} style={{ color: C.pink }}>🗑</button>
+              </div>
+              <div className="space-y-2 pl-2">
+                {q.options.map((o, oi) => (
+                  <div key={o.id} className="flex items-start gap-2">
+                    <span style={{ ...tiny, marginTop: 9 }}>{String.fromCharCode(65 + oi)}</span>
+                    <div className="flex-1 space-y-1.5">
+                      <input value={o.text} placeholder="Answer option" onChange={(e) => setOpt(q.id, o.id, "text", e.target.value)} style={field} />
+                      <input value={traitsToStr(o.traits)} placeholder="traits: bold, fun" onChange={(e) => setOpt(q.id, o.id, "traits", e.target.value)} style={{ ...field, fontSize: 12.5 }} />
+                    </div>
+                    <button onClick={() => delOpt(q.id, o.id)} style={{ color: C.pink, marginTop: 7 }}>🗑</button>
+                  </div>
+                ))}
+                <button onClick={() => addOpt(q.id)} className="flex items-center gap-1 font-bold" style={{ color: C.grape, fontSize: 13 }}>+ Add option</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={addQ} className="mt-3 flex items-center gap-1.5 font-bold" style={{ color: C.grape, fontSize: 14 }}>+ Add question</button>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 px-4 py-3" style={{ background: C.frost, borderTop: `2px solid #ddd6ee` }}>
+        <div className="mx-auto" style={{ maxWidth: 560 }}>
+          <button onClick={save} className="w-full py-3.5 rounded-2xl font-extrabold ooq-pop" style={{ background: saved ? C.lime : C.grape, color: saved ? C.ink : "white", fontSize: 16, fontFamily: FONTS.display }}>
+            {saved ? "Saved ✓" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
