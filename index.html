@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -41,7 +40,11 @@ const FONTS = {
 };
 const KV_BASE = "https://kvdb.io";
 async function createRoom() {
-  const res = await fetch(`${KV_BASE}/`, { method: "POST" });
+  const res = await fetch(`${KV_BASE}/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "email=one-of-one-quiz@example.com"
+  });
   const id = (await res.text()).trim();
   return id;
 }
