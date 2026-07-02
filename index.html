@@ -75,38 +75,10 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const traitsToStr = (a) => (a || []).join(", ");
 const strToTraits = (s) => (s || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
 const DEFAULT_CONFIG = {
-  title: "Which Snack Are You?",
+  title: "My Quiz",
   hostPassword: "party",
-  results: [
-    { id: uid(), name: "Spicy Chip", traits: ["bold", "loud", "fun"] },
-    { id: uid(), name: "Dark Chocolate", traits: ["deep", "calm", "classy"] },
-    { id: uid(), name: "Gummy Bears", traits: ["fun", "sweet", "playful"] },
-    { id: uid(), name: "Black Coffee", traits: ["intense", "focused", "calm"] },
-    { id: uid(), name: "Fresh Bread", traits: ["warm", "cozy", "classy"] },
-    { id: uid(), name: "Sour Candy", traits: ["bold", "playful", "loud"] },
-    { id: uid(), name: "Smoothie", traits: ["fresh", "calm", "sweet"] },
-    { id: uid(), name: "Hot Wings", traits: ["loud", "bold", "fun"] }
-  ],
-  questions: [
-    { id: uid(), text: "Pick a Friday night", options: [
-      { id: uid(), text: "Out till sunrise", traits: ["loud", "fun"] },
-      { id: uid(), text: "Cozy on the couch", traits: ["warm", "calm"] },
-      { id: uid(), text: "Something new + intense", traits: ["bold", "intense"] },
-      { id: uid(), text: "Chill with a few people", traits: ["calm", "sweet"] }
-    ] },
-    { id: uid(), text: "Your group calls you the\u2026", options: [
-      { id: uid(), text: "Life of the party", traits: ["loud", "fun"] },
-      { id: uid(), text: "Wise one", traits: ["deep", "calm"] },
-      { id: uid(), text: "Wild card", traits: ["bold", "playful"] },
-      { id: uid(), text: "Comfort person", traits: ["warm", "cozy"] }
-    ] },
-    { id: uid(), text: "Choose a vibe", options: [
-      { id: uid(), text: "Neon + bass", traits: ["loud", "bold"] },
-      { id: uid(), text: "Candles + quiet", traits: ["calm", "classy"] },
-      { id: uid(), text: "Sunshine + fresh air", traits: ["fresh", "sweet"] },
-      { id: uid(), text: "Confetti + chaos", traits: ["playful", "fun"] }
-    ] }
-  ]
+  results: [],
+  questions: []
 };
 function bestAvailable(config, chosenOptionIds, claims) {
   const tally = {};
