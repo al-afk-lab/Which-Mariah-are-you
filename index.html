@@ -38,35 +38,39 @@ const FONTS = {
   body: "'Nunito', system-ui, sans-serif",
   mono: "'Space Mono', ui-monospace, monospace"
 };
-const KV_BASE = "https://kvdb.io";
-async function createRoom() {
-  const res = await fetch(`${KV_BASE}/`, {
+const JB_BASE = "https://jsonblob.com/api/jsonBlob";
+const ROOM_ID_RE = /^[a-zA-Z0-9_-]{6,64}$/;
+async function createRoom(initialData) {
+  const res = await fetch(JB_BASE, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: "email=one-of-one-quiz@example.com"
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(initialData)
   });
-  const id = (await res.text()).trim();
+  if (!res.ok) throw new Error("Storage service did not accept the new room.");
+  const loc = res.headers.get("Location") || res.headers.get("location");
+  const id = loc ? loc.split("/").pop().trim() : "";
+  if (!ROOM_ID_RE.test(id)) throw new Error("Storage service returned an unusable room id.");
   return id;
 }
-async function loadKey(room, key) {
+async function loadRoom(room) {
+  if (!ROOM_ID_RE.test(room)) return null;
   try {
-    const res = await fetch(`${KV_BASE}/${room}/${key}`, { cache: "no-store" });
-    if (res.status === 404) return null;
+    const res = await fetch(`${JB_BASE}/${room}`, { cache: "no-store" });
     if (!res.ok) return null;
-    const text = await res.text();
-    if (!text) return null;
-    return JSON.parse(text);
+    return await res.json();
   } catch (e) {
     return null;
   }
 }
-async function saveKey(room, key, val) {
+async function saveRoom(room, data) {
+  if (!ROOM_ID_RE.test(room)) return false;
   try {
-    await fetch(`${KV_BASE}/${room}/${key}`, {
-      method: "POST",
-      body: JSON.stringify(val)
+    const res = await fetch(`${JB_BASE}/${room}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
     });
-    return true;
+    return res.ok;
   } catch (e) {
     return false;
   }
@@ -102,7 +106,8 @@ function bestAvailable(config, chosenOptionIds, claims) {
 }
 function getRoomFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  return params.get("room");
+  const room = params.get("room");
+  return room && ROOM_ID_RE.test(room) ? room : null;
 }
 function RoomLanding() {
   const [creating, setCreating] = useState(false);
@@ -111,7 +116,7 @@ function RoomLanding() {
     setCreating(true);
     setError(false);
     try {
-      const room = await createRoom();
+      const room = await createRoom({ config: DEFAULT_CONFIG, claims: {} });
       const url = new URL(window.location.href);
       url.searchParams.set("room", room);
       sessionStorage.setItem("ooq-just-created", "1");
@@ -143,6 +148,7 @@ function QuizApp({ room }) {
   const [config, setConfig] = useState(null);
   const [claims, setClaims] = useState({});
   const [loading, setLoading] = useState(true);
+  const [roomError, setRoomError] = useState(false);
   const [justCreated, setJustCreated] = useState(false);
   useEffect(() => {
     if (sessionStorage.getItem("ooq-just-created")) {
@@ -150,20 +156,34 @@ function QuizApp({ room }) {
       sessionStorage.removeItem("ooq-just-created");
     }
     (async () => {
-      let cfg = await loadKey(room, "quizConfig");
-      if (!cfg) {
-        cfg = DEFAULT_CONFIG;
-        await saveKey(room, "quizConfig", cfg);
+      const data = await loadRoom(room);
+      if (!data) {
+        setRoomError(true);
+        setLoading(false);
+        return;
       }
-      const cl = await loadKey(room, "quizClaims") || {};
-      setConfig(cfg);
-      setClaims(cl);
+      setConfig(data.config || DEFAULT_CONFIG);
+      setClaims(data.claims || {});
       setLoading(false);
     })();
   }, [room]);
-  const refreshClaims = async () => setClaims(await loadKey(room, "quizClaims") || {});
-  if (loading || !config)
+  const refreshClaims = async () => {
+    const data = await loadRoom(room);
+    if (data) setClaims(data.claims || {});
+  };
+  if (loading)
     return /* @__PURE__ */ React.createElement("div", { style: { background: C.frost, minHeight: "100vh", fontFamily: FONTS.body } });
+  if (roomError) {
+    return /* @__PURE__ */ React.createElement("div", { style: { background: C.frost, minHeight: "100vh", fontFamily: FONTS.body, color: C.ink } }, /* @__PURE__ */ React.createElement("div", { className: "mx-auto px-4 py-10 text-center", style: { maxWidth: 480 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: FONTS.display, fontSize: 30, color: C.grape }, className: "font-extrabold mb-3" }, "This quiz link isn't working"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 15 }, className: "mb-6" }, "The room this link points to couldn't be found \u2014 it may have expired or the link got cut off. Start a new quiz below."), /* @__PURE__ */ React.createElement(
+      "a",
+      {
+        href: window.location.origin + window.location.pathname,
+        className: "inline-block px-6 py-3 rounded-2xl font-extrabold",
+        style: { background: C.pink, color: "white", fontSize: 16, fontFamily: FONTS.display }
+      },
+      "Create a new quiz room"
+    )));
+  }
   const claimedCount = Object.keys(claims).length;
   const total = config.results.length;
   const shareUrl = window.location.href;
@@ -227,7 +247,8 @@ function Quiz({ config, claims, setClaims, refreshClaims, room }) {
     if (qi + 1 < config.questions.length) {
       setQi(qi + 1);
     } else {
-      const latest = await loadKey(room, "quizClaims") || {};
+      const data = await loadRoom(room);
+      const latest = data ? data.claims || {} : claims;
       const match = bestAvailable(config, next, latest);
       if (!match) {
         setStage("full");
@@ -235,7 +256,7 @@ function Quiz({ config, claims, setClaims, refreshClaims, room }) {
       }
       const n = Object.keys(latest).length + 1;
       latest[match.id] = { name: name.trim(), num: n, ts: Date.now() };
-      await saveKey(room, "quizClaims", latest);
+      await saveRoom(room, { config: data && data.config || config, claims: latest });
       setClaims(latest);
       setResult(match);
       setNum(n);
@@ -338,7 +359,9 @@ function Host({ config, setConfig, claims, setClaims, refreshClaims, claimedCoun
         options: q.options.filter((o) => o.text.trim()).map(({ traitsText, ...o }) => o)
       }))
     };
-    await saveKey(room, "quizConfig", clean);
+    const data = await loadRoom(room);
+    const currentClaims = data ? data.claims || {} : claims;
+    await saveRoom(room, { config: clean, claims: currentClaims });
     setConfig(clean);
     setDraft(JSON.parse(JSON.stringify(clean)));
     setSaved(true);
@@ -346,7 +369,7 @@ function Host({ config, setConfig, claims, setClaims, refreshClaims, claimedCoun
   };
   const resetClaims = async () => {
     if (!window.confirm("Clear everyone's results and start fresh? This can't be undone.")) return;
-    await saveKey(room, "quizClaims", {});
+    await saveRoom(room, { config, claims: {} });
     setClaims({});
   };
   const copyLink = async () => {
