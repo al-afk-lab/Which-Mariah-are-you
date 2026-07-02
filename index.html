@@ -38,24 +38,32 @@ const FONTS = {
   body: "'Nunito', system-ui, sans-serif",
   mono: "'Space Mono', ui-monospace, monospace"
 };
-const JB_BASE = "https://jsonblob.com/api/jsonBlob";
+const JB_BASE = "https://api.jsonbin.io/v3/b";
+const JB_KEY = "$2a$10$2PVBwxFvtBarGDl8lDxPJuBFnDk22YaSBcplqdORFcuO/4C5sjN2e";
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{6,64}$/;
 async function createRoom(initialData) {
   const res = await fetch(JB_BASE, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Master-Key": JB_KEY,
+      "X-Bin-Private": "false"
+    },
     body: JSON.stringify(initialData)
   });
   if (!res.ok) throw new Error("Storage service did not accept the new room.");
-  const loc = res.headers.get("Location") || res.headers.get("location");
-  const id = loc ? loc.split("/").pop().trim() : "";
+  const body = await res.json();
+  const id = body && body.metadata && body.metadata.id ? String(body.metadata.id).trim() : "";
   if (!ROOM_ID_RE.test(id)) throw new Error("Storage service returned an unusable room id.");
   return id;
 }
 async function loadRoom(room) {
   if (!ROOM_ID_RE.test(room)) return null;
   try {
-    const res = await fetch(`${JB_BASE}/${room}`, { cache: "no-store" });
+    const res = await fetch(`${JB_BASE}/${room}/latest`, {
+      cache: "no-store",
+      headers: { "X-Master-Key": JB_KEY, "X-Bin-Meta": "false" }
+    });
     if (!res.ok) return null;
     return await res.json();
   } catch (e) {
@@ -67,7 +75,7 @@ async function saveRoom(room, data) {
   try {
     const res = await fetch(`${JB_BASE}/${room}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Master-Key": JB_KEY },
       body: JSON.stringify(data)
     });
     return res.ok;
@@ -135,7 +143,7 @@ function RoomLanding() {
       style: { background: creating ? "#d8d2e8" : C.pink, color: "white", fontSize: 17, fontFamily: FONTS.display }
     },
     creating ? "Creating\u2026" : "Create my quiz room"
-  ), error && /* @__PURE__ */ React.createElement("p", { style: { color: C.pink, fontSize: 13 }, className: "mt-3 font-bold" }, "Couldn't reach the storage service \u2014 check your connection and try again."), /* @__PURE__ */ React.createElement("p", { className: "mt-6", style: { fontSize: 12.5, color: C.grape, opacity: 0.7 } }, 'Default host password is "party" \u2014 change it under Host Setup before sharing the link.')));
+  ), error && /* @__PURE__ */ React.createElement("p", { style: { color: C.pink, fontSize: 13 }, className: "mt-3 font-bold" }, "Couldn't reach the storage service \u2014 check your connection and try again."), /* @__PURE__ */ React.createElement("p", { className: "mt-6", style: { fontSize: 12.5, color: C.grape, opacity: 0.7 } }, "You'll be able to set a private host password once your quiz is created.")));
 }
 function App() {
   const room = getRoomFromUrl();
